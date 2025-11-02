@@ -27,6 +27,9 @@ function App() {
   const [showAttendance, setShowAttendance] = useState(false);
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [statusMessages, setStatusMessages] = useState<string[]>([]);
+  const [sessionRecords, setSessionRecords] = useState<AttendanceRecord[]>([]);
+  const [queueSize, setQueueSize] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -36,6 +39,8 @@ function App() {
   const scanningRef = useRef(false);
   const lastScannedRef = useRef<{ barcode: string; timestamp: number } | null>(null);
   const processingRef = useRef(false);
+  const uploadQueueRef = useRef<Array<{ barcode: string; blob: Blob }>>([]);
+  const isUploadingRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -56,7 +61,9 @@ function App() {
     try {
       addStatusMessage('Starting camera...');
       
-      // Get camera stream for recording
+      setSessionRecords([]);
+      console.log('🆕 New session started - records cleared');
+      
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: 1280, height: 720 }
       });
@@ -74,15 +81,14 @@ function App() {
       scanningRef.current = true;
       addStatusMessage('📷 Initializing barcode scanner...');
       
-      // Initialize Html5Qrcode scanner
       scannerRef.current = new Html5Qrcode("reader");
       
-      // Start scanning
       await scannerRef.current.start(
         { facingMode: "user" },
         {
-          fps: 10,
-          qrbox: { width: 250, height: 250 }
+          fps: 20,
+          qrbox: { width: 400, height: 400 },
+          aspectRatio: 1.0
         },
         (decodedText, decodedResult) => {
           if (!scanningRef.current || processingRef.current) {
@@ -96,16 +102,14 @@ function App() {
           
           addStatusMessage(`🎯 Detected: ${decodedText}`);
           
-          // Check for duplicates within 5 seconds
           const now = Date.now();
           if (lastScannedRef.current && 
               lastScannedRef.current.barcode === decodedText && 
               now - lastScannedRef.current.timestamp < 5000) {
-            console.log('⏭️ Skipping duplicate (scanned', ((now - lastScannedRef.current.timestamp) / 1000).toFixed(1), 'seconds ago)');
+            console.log('⏭️ Skipping duplicate');
             return;
           }
           
-          // Validate 9 digits
           if (/^\d{9}$/.test(decodedText)) {
             console.log('✅ Valid 9-digit barcode');
             processingRef.current = true;
@@ -114,16 +118,19 @@ function App() {
             setCurrentBarcode(decodedText);
             addStatusMessage(`✅ Valid: ${decodedText} - Recording...`);
             
-            // Record video and upload
             recordVideo(decodedText);
+            
+            setTimeout(() => {
+              processingRef.current = false;
+              console.log('🔄 Ready for next barcode');
+            }, 1000);
           } else {
-            console.log('⚠️ Invalid barcode format:', decodedText, '(must be exactly 9 digits)');
+            console.log('⚠️ Invalid format:', decodedText);
             addStatusMessage(`⚠️ Invalid: ${decodedText} (need 9 digits)`);
           }
         },
         (errorMessage) => {
-          // Errors are normal when no barcode is visible
-          // Don't log them to avoid console spam
+          // Ignore - normal when no barcode visible
         }
       );
       
@@ -138,14 +145,13 @@ function App() {
 
   const recordVideo = async (barcode: string) => {
     if (!streamRef.current) {
-      console.error('❌ No stream available for recording');
-      processingRef.current = false;
+      console.error('❌ No stream available');
       addStatusMessage('❌ No camera stream');
       return;
     }
     
     console.log('🎥 STARTING RECORDING for barcode:', barcode);
-    addStatusMessage('🎥 Recording 4-second video...');
+    addStatusMessage('🎥 Recording 2-second video...');
     setIsRecording(true);
     recordedChunksRef.current = [];
     
@@ -158,62 +164,91 @@ function App() {
       
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          console.log('📦 Video chunk:', event.data.size, 'bytes');
           recordedChunksRef.current.push(event.data);
         }
       };
       
       mediaRecorder.onstop = async () => {
-        console.log('⏹️ Recording stopped. Total chunks:', recordedChunksRef.current.length);
         const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
         console.log('📦 Video blob created:', blob.size, 'bytes');
         
         if (blob.size === 0) {
-          console.error('❌ Video blob is empty!');
-          addStatusMessage('❌ Recording failed - empty video');
-          processingRef.current = false;
+          console.error('❌ Empty video');
+          addStatusMessage('❌ Recording failed');
           setIsRecording(false);
           return;
         }
         
-        await uploadVideo(barcode, blob);
+        // Add to queue
+        uploadQueueRef.current.push({ barcode, blob });
+        setQueueSize(uploadQueueRef.current.length);
+        console.log('📋 Added to queue. Size:', uploadQueueRef.current.length);
+        addStatusMessage(`📋 Queued: ${barcode}`);
+        
         setIsRecording(false);
+        
+        // Process queue
+        if (!isUploadingRef.current) {
+          processUploadQueue();
+        }
       };
       
       mediaRecorder.onerror = (event) => {
         console.error('❌ MediaRecorder error:', event);
-        addStatusMessage('❌ Recording error');
         setIsRecording(false);
-        processingRef.current = false;
       };
       
       mediaRecorder.start();
-      console.log('✅ MediaRecorder started, state:', mediaRecorder.state);
+      console.log('✅ Recording started');
       
       setTimeout(() => {
         if (mediaRecorder.state === 'recording') {
-          console.log('⏱️ 4 seconds elapsed, stopping recording...');
           mediaRecorder.stop();
-        } else {
-          console.log('⚠️ MediaRecorder not recording, state:', mediaRecorder.state);
         }
-      }, 4000);
+      }, 2000);
       
     } catch (error) {
       console.error('❌ Recording error:', error);
       addStatusMessage(`❌ Recording error: ${error}`);
       setIsRecording(false);
-      processingRef.current = false;
     }
+  };
+
+  const processUploadQueue = async () => {
+    if (uploadQueueRef.current.length === 0) {
+      isUploadingRef.current = false;
+      setIsUploading(false);
+      setQueueSize(0);
+      console.log('✅ Queue empty');
+      return;
+    }
+    
+    if (isUploadingRef.current) {
+      return;
+    }
+    
+    isUploadingRef.current = true;
+    setIsUploading(true);
+    
+    while (uploadQueueRef.current.length > 0) {
+      const item = uploadQueueRef.current.shift();
+      setQueueSize(uploadQueueRef.current.length);
+      
+      if (item) {
+        console.log('📤 Processing:', item.barcode, '(Remaining:', uploadQueueRef.current.length, ')');
+        await uploadVideo(item.barcode, item.blob);
+      }
+    }
+    
+    isUploadingRef.current = false;
+    setIsUploading(false);
+    setQueueSize(0);
+    console.log('✅ All uploads complete');
   };
 
   const uploadVideo = async (barcode: string, videoBlob: Blob) => {
     try {
-      console.log('📤 UPLOADING VIDEO');
-      console.log('   Barcode:', barcode);
-      console.log('   Video size:', videoBlob.size, 'bytes');
-      console.log('   API URL:', `${API_BASE}/api/mark_attendance`);
-      
+      console.log('📤 UPLOADING:', barcode, videoBlob.size, 'bytes');
       addStatusMessage(`📤 Uploading ${barcode}...`);
       
       const formData = new FormData();
@@ -225,19 +260,27 @@ function App() {
         body: formData
       });
       
-      console.log('📥 Response status:', response.status);
-      console.log('📥 Response ok:', response.ok);
+      console.log('📥 Response:', response.status);
       
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('❌ Response error:', errorText);
         throw new Error(`HTTP ${response.status}: ${errorText}`);
       }
       
       const result: ScanResult = await response.json();
-      console.log('📥 Response data:', result);
+      console.log('📥 Result:', result);
       
       setLastResult(result);
+      
+      // Add to session records AFTER successful upload
+      const newRecord: AttendanceRecord = {
+        timestamp: result.timestamp || new Date().toLocaleString(),
+        roll_number: result.roll_no,
+        status: result.status,
+        distance: result.distance !== undefined ? result.distance.toFixed(3) : ''
+      };
+      setSessionRecords(prev => [...prev, newRecord]);
+      console.log('📝 Added to session records');
       
       const statusEmoji: Record<string, string> = {
         'VALID': '✅',
@@ -252,27 +295,12 @@ function App() {
       const distanceStr = result.distance !== undefined ? ` (${result.distance.toFixed(3)})` : '';
       addStatusMessage(`${emoji} ${result.status} - ${result.roll_no}${distanceStr}`);
       
-      console.log('✅ Attendance marked successfully');
-      console.log('⏭️ Waiting 2 seconds before next scan...');
-      
-      setTimeout(() => {
-        setCurrentBarcode('');
-        processingRef.current = false;
-        if (scanningRef.current) {
-          addStatusMessage('👀 Ready for next scan...');
-        }
-      }, 2000);
+      console.log('✅ Attendance marked');
+      setCurrentBarcode('');
       
     } catch (error) {
       console.error('❌ UPLOAD ERROR:', error);
       addStatusMessage(`❌ Upload failed: ${error}`);
-      
-      setTimeout(() => {
-        processingRef.current = false;
-        if (scanningRef.current) {
-          addStatusMessage('🔄 Retrying scanner...');
-        }
-      }, 2000);
     }
   };
 
@@ -282,7 +310,6 @@ function App() {
     scanningRef.current = false;
     processingRef.current = false;
     
-    // Stop media recorder
     if (mediaRecorderRef.current) {
       try {
         if (mediaRecorderRef.current.state === 'recording') {
@@ -294,7 +321,6 @@ function App() {
       }
     }
     
-    // Stop Html5Qrcode scanner
     if (scannerRef.current) {
       try {
         await scannerRef.current.stop();
@@ -305,7 +331,6 @@ function App() {
       scannerRef.current = null;
     }
     
-    // Stop camera stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
         console.log('⏹️ Stopping track:', track.kind);
@@ -315,7 +340,6 @@ function App() {
       console.log('✅ Camera stream stopped');
     }
     
-    // Clear video element
     if (videoRef.current) {
       videoRef.current.srcObject = null;
       videoRef.current.pause();
@@ -336,18 +360,68 @@ function App() {
   const fetchAttendance = async () => {
     try {
       addStatusMessage('📋 Fetching attendance...');
-      const response = await fetch(`${API_BASE}/api/attendance`);
-      const data = await response.json();
       
-      if (data.ok) {
-        setAttendanceRecords(data.records);
-        setShowAttendance(true);
-        addStatusMessage(`✅ Loaded ${data.records.length} records`);
-      }
+      // Show session records
+      setAttendanceRecords(sessionRecords);
+      setShowAttendance(true);
+      addStatusMessage(`✅ Showing ${sessionRecords.length} records from this session`);
+      
     } catch (error) {
       console.error('❌ Error:', error);
       addStatusMessage('❌ Failed to fetch attendance');
     }
+  };
+
+  const closeAttendanceModal = async () => {
+    setShowAttendance(false);
+    
+    // Clear backend records
+    try {
+      console.log('🗑️  Clearing backend...');
+      const response = await fetch(`${API_BASE}/api/clear_attendance`, {
+        method: 'POST'
+      });
+      
+      if (response.ok) {
+        console.log('✅ Backend cleared');
+        addStatusMessage('🗑️  Records cleared');
+      }
+    } catch (error) {
+      console.error('❌ Error:', error);
+    }
+  };
+
+  const exportToCSV = () => {
+    if (attendanceRecords.length === 0) {
+      alert('No records to export');
+      return;
+    }
+    
+    const headers = ['Timestamp', 'Roll Number', 'Status', 'Distance'];
+    const rows = attendanceRecords.map(r => [
+      r.timestamp,
+      r.roll_number,
+      r.status,
+      r.distance
+    ]);
+    
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `attendance_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    console.log('📥 Exported', attendanceRecords.length, 'records');
+    addStatusMessage(`📥 Exported ${attendanceRecords.length} records`);
   };
 
   const getStatusColor = (status: string) => {
@@ -392,10 +466,8 @@ function App() {
       </div>
 
       <div className="video-container">
-        {/* Html5Qrcode creates its own video element */}
         <div id="reader" style={{ width: '100%' }}></div>
         
-        {/* Hidden video for recording */}
         <video 
           ref={videoRef} 
           autoPlay 
@@ -419,6 +491,20 @@ function App() {
 
       <div className="status-console">
         <h3>📊 Status Console</h3>
+        
+        {(queueSize > 0 || isUploading) && (
+          <div style={{ 
+            background: '#fef3c7', 
+            padding: '10px', 
+            borderRadius: '5px', 
+            marginBottom: '10px',
+            fontSize: '0.9rem',
+            color: '#92400e'
+          }}>
+            {isUploading ? '⏳ Processing...' : '📋'} {queueSize} {queueSize === 1 ? 'upload' : 'uploads'} in queue
+          </div>
+        )}
+        
         <div className="console-messages">
           {statusMessages.length === 0 ? (
             <div className="console-message">Ready to start...</div>
@@ -444,16 +530,23 @@ function App() {
       )}
 
       {showAttendance && (
-        <div className="attendance-modal" onClick={() => setShowAttendance(false)}>
+        <div className="attendance-modal" onClick={closeAttendanceModal}>
           <div className="attendance-content" onClick={(e) => e.stopPropagation()}>
             <div className="attendance-header">
-              <h2>Attendance Records ({attendanceRecords.length})</h2>
-              <button onClick={() => setShowAttendance(false)} className="close-btn">✕</button>
+              <h2>Attendance Records - This Session ({attendanceRecords.length})</h2>
+              <div>
+                {attendanceRecords.length > 0 && (
+                  <button onClick={exportToCSV} className="btn btn-info" style={{ marginRight: '10px' }}>
+                    📥 Export CSV
+                  </button>
+                )}
+                <button onClick={closeAttendanceModal} className="close-btn">✕</button>
+              </div>
             </div>
             
             <div className="attendance-table-container">
               {attendanceRecords.length === 0 ? (
-                <div className="no-records">No records yet</div>
+                <div className="no-records">No attendance recorded in this session yet</div>
               ) : (
                 <table className="attendance-table">
                   <thead>
@@ -482,6 +575,15 @@ function App() {
                     ))}
                   </tbody>
                 </table>
+              )}
+            </div>
+            
+            <div style={{ padding: '20px', textAlign: 'center', color: '#6b7280', fontSize: '0.9rem' }}>
+              ℹ️ Records will be cleared from database when you close this window
+              {queueSize > 0 && (
+                <div style={{ marginTop: '10px', color: '#f59e0b' }}>
+                  ⚠️ Note: {queueSize} upload{queueSize > 1 ? 's' : ''} still processing in queue
+                </div>
               )}
             </div>
           </div>

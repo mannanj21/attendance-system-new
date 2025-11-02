@@ -135,8 +135,11 @@ def get_attendance():
         if os.path.exists(SCANS_CSV):
             with open(SCANS_CSV, 'r') as f:
                 reader = csv.DictReader(f)
-                records = list(reader)
+                for row in reader:
+                    records.append(row)
+                    print(f"📋 Record: {row}")  # Debug log
         
+        print(f"✅ Returning {len(records)} records")
         return jsonify({
             'ok': True,
             'records': records,
@@ -145,6 +148,29 @@ def get_attendance():
         
     except Exception as e:
         print(f"❌ Error in get_attendance: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/clear_attendance', methods=['POST'])
+def clear_attendance():
+    """
+    Clear all records from scans.csv (keep headers)
+    """
+    try:
+        with open(SCANS_CSV, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['timestamp', 'roll_number', 'status', 'distance'])
+        
+        print("🗑️  Cleared all attendance records")
+        return jsonify({
+            'ok': True,
+            'message': 'All records cleared'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in clear_attendance: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 

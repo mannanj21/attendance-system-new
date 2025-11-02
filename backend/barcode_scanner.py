@@ -4,6 +4,7 @@ barcode_scanner.py (Refactored for web backend)
 
 Provides verify_face() function for face verification from uploaded videos.
 No camera UI - just face comparison logic.
+Optimized for faster processing.
 """
 
 import cv2
@@ -17,7 +18,8 @@ import face_recognition
 ROLL_REGEX = re.compile(r'^\d{9}$')
 DB_FILE = "face_data.json"
 SIMILARITY_THRESHOLD = 0.4
-MAX_FRAMES_TO_CHECK = 30  # Check first 30 frames for faces
+MAX_FRAMES_TO_CHECK = 20  # Reduced from 30 for faster processing
+FRAME_SKIP = 2  # Process every 2nd frame for speed
 # ============
 
 
@@ -94,15 +96,22 @@ def verify_face(barcode: str, video_path: str) -> dict:
         
         print(f"📹 Processing video: {video_path}")
         
-        # Extract faces from video frames
+        # Extract faces from video frames (optimized)
         face_found = False
         best_distance = float('inf')
         frames_checked = 0
+        frame_count = 0
         
         while frames_checked < MAX_FRAMES_TO_CHECK:
             ret, frame = cap.read()
             if not ret:
                 break
+            
+            frame_count += 1
+            
+            # Skip frames for faster processing
+            if frame_count % FRAME_SKIP != 0:
+                continue
             
             frames_checked += 1
             
@@ -130,7 +139,7 @@ def verify_face(barcode: str, video_path: str) -> dict:
                 if dist < best_distance:
                     best_distance = dist
                 
-                print(f"📊 Frame {frames_checked}: Face distance = {dist:.3f}")
+                print(f"📊 Frame {frame_count}: Face distance = {dist:.3f}")
         
         cap.release()
         
@@ -186,3 +195,5 @@ if __name__ == "__main__":
         print(f"\nResult: {result}")
     else:
         print(f"Test video not found: {test_video}")
+        print("\nFunction is ready to use with:")
+        print("  result = verify_face('123456789', '/path/to/video.webm')")
