@@ -9,15 +9,29 @@ interface AttendanceRecord {
   roll_number: string;
   status: string;
   distance: string;
+  enrolled?: boolean;
 }
 
 interface ScanResult {
   ok: boolean;
   status: string;
   roll_no: string;
-  distance?: number;
+  distance?: number | string;
   timestamp?: string;
+  enrolled?: boolean;
 }
+
+// Helper function to safely format distance
+const formatDistance = (distance: number | string | undefined): string => {
+  if (distance === undefined || distance === null || distance === '') {
+    return '';
+  }
+  const num = typeof distance === 'string' ? parseFloat(distance) : distance;
+  if (isNaN(num)) {
+    return '';
+  }
+  return num.toFixed(3);
+};
 
 function App() {
   const [isScanning, setIsScanning] = useState(false);
@@ -129,7 +143,7 @@ function App() {
             addStatusMessage(`⚠️ Invalid: ${decodedText} (need 9 digits)`);
           }
         },
-        (errorMessage) => {
+        (_errorMessage) => {
           // Ignore - normal when no barcode visible
         }
       );
@@ -277,7 +291,8 @@ function App() {
         timestamp: result.timestamp || new Date().toLocaleString(),
         roll_number: result.roll_no,
         status: result.status,
-        distance: result.distance !== undefined ? result.distance.toFixed(3) : ''
+        distance: formatDistance(result.distance),
+        enrolled: result.enrolled || false
       };
       setSessionRecords(prev => [...prev, newRecord]);
       console.log('📝 Added to session records');
@@ -292,8 +307,10 @@ function App() {
       };
       
       const emoji = statusEmoji[result.status] || '❓';
-      const distanceStr = result.distance !== undefined ? ` (${result.distance.toFixed(3)})` : '';
-      addStatusMessage(`${emoji} ${result.status} - ${result.roll_no}${distanceStr}`);
+      const distanceStr = formatDistance(result.distance);
+      const distanceDisplay = distanceStr ? ` (${distanceStr})` : '';
+      const enrolledStr = result.enrolled ? ' 🆕 NEW ENROLLMENT' : '';
+      addStatusMessage(`${emoji} ${result.status} - ${result.roll_no}${distanceDisplay}${enrolledStr}`);
       
       console.log('✅ Attendance marked');
       setCurrentBarcode('');
@@ -397,12 +414,13 @@ function App() {
       return;
     }
     
-    const headers = ['Timestamp', 'Roll Number', 'Status', 'Distance'];
+    const headers = ['Timestamp', 'Roll Number', 'Status', 'Distance', 'Enrolled'];
     const rows = attendanceRecords.map(r => [
       r.timestamp,
       r.roll_number,
       r.status,
-      r.distance
+      r.distance,
+      r.enrolled ? 'Yes' : 'No'
     ]);
     
     const csvContent = [
@@ -523,7 +541,7 @@ function App() {
           </div>
           {lastResult && lastResult.distance !== undefined && (
             <div className="distance-display">
-              Distance: {lastResult.distance.toFixed(3)}
+              Distance: {formatDistance(lastResult.distance)}
             </div>
           )}
         </div>
@@ -561,7 +579,19 @@ function App() {
                     {attendanceRecords.map((record, index) => (
                       <tr key={index}>
                         <td>{record.timestamp}</td>
-                        <td><strong>{record.roll_number}</strong></td>
+                        <td>
+                          <strong>{record.roll_number}</strong>
+                          {record.enrolled && (
+                            <span style={{ 
+                              marginLeft: '8px', 
+                              fontSize: '0.85rem', 
+                              color: '#2563eb',
+                              fontWeight: 'bold'
+                            }}>
+                              🆕 NEW
+                            </span>
+                          )}
+                        </td>
                         <td>
                           <span 
                             className="status-badge"

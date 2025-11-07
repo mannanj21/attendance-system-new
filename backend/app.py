@@ -2,6 +2,7 @@
 """
 Flask backend for web-based attendance system
 Handles video upload, face verification, and attendance logging
+Supports auto-enrollment for new students
 """
 
 from flask import Flask, request, jsonify
@@ -36,92 +37,112 @@ def allowed_file(filename):
 @app.route('/api/mark_attendance', methods=['POST'])
 def mark_attendance():
     """
-    Accept barcode and video file, verify face, log result
+    Accept barcode and video file, verify face, log result.
+    Auto-enrolls new students on first scan.
     """
     try:
-        print("\n" + "="*50)
+        print("\n" + "=" * 50)
         print("📥 NEW ATTENDANCE REQUEST")
-        print("="*50)
-        
+        print("=" * 50)
+
         # Validate request
         if 'barcode' not in request.form:
             print("❌ Missing barcode parameter")
             return jsonify({'error': 'Missing barcode parameter'}), 400
-        
+
         if 'video' not in request.files:
             print("❌ Missing video file")
             return jsonify({'error': 'Missing video file'}), 400
-        
+
         barcode = request.form['barcode'].strip()
         video_file = request.files['video']
-        
+
         print(f"📋 Barcode: {barcode}")
         print(f"📹 Video filename: {video_file.filename}")
         print(f"📦 Video size: {video_file.content_length or 'unknown'} bytes")
-        
+
         if video_file.filename == '':
             print("❌ Empty video filename")
             return jsonify({'error': 'Empty video filename'}), 400
-        
+
         # Save video temporarily
         filename = secure_filename(f"{barcode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.webm")
         video_path = os.path.join(UPLOAD_FOLDER, filename)
         video_file.save(video_path)
-        
+
         print(f"💾 Video saved to: {video_path}")
         print(f"📊 File size on disk: {os.path.getsize(video_path)} bytes")
-        
-        # Verify face
+
+        # Verify face (will auto-enroll if not found)
         print(f"🔍 Starting face verification for {barcode}...")
         result = verify_face(barcode, video_path)
-        
+
         print(f"✅ Verification complete:")
         print(f"   Status: {result['status']}")
         print(f"   OK: {result['ok']}")
+        print(f"   Enrolled: {result.get('enrolled', False)}")
         if 'distance' in result:
-            print(f"   Distance: {result['distance']:.4f}")
-        
+            print(f"   Distance: {result.get('distance', 'N/A')}")
+
+        # Prepare status text
+        status_text = result['status']
+        if result.get('enrolled', False):
+            status_text = f"{status_text} (NEW ENROLLMENT)"
+            print(f"   🆕 NEW ENROLLMENT - First time for {barcode}")
+
         # Log to CSV
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         distance = result.get('distance', '')
         
+        # Handle distance formatting
+        if distance != '' and distance is not None:
+            try:
+                distance = f"{float(distance):.4f}"
+            except (ValueError, TypeError):
+                distance = str(distance)
+
         with open(SCANS_CSV, 'a', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([
                 timestamp,
                 result.get('roll_no', barcode),
-                result['status'],
+                status_text,
                 distance
             ])
-        
+
         print(f"📝 Logged to {SCANS_CSV}")
-        
+
         # Clean up video file
         try:
             os.remove(video_path)
             print(f"🗑️  Video file removed")
         except Exception as e:
             print(f"⚠️  Could not remove video: {e}")
-        
+
         # Return result
         response_data = {
             'ok': result['ok'],
             'status': result['status'],
             'roll_no': result.get('roll_no', barcode),
             'distance': distance,
-            'timestamp': timestamp
+            'timestamp': timestamp,
+            'enrolled': result.get('enrolled', False)
         }
-        
+
         print(f"📤 Sending response: {response_data}")
-        print("="*50 + "\n")
-        
+        print("=" * 50 + "\n")
+
         return jsonify(response_data)
-        
+
     except Exception as e:
         print(f"❌ ERROR in mark_attendance: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'error': str(e),
+            'ok': False,
+            'status': 'ERROR'
+        }), 500
 
 
 @app.route('/api/attendance', methods=['GET'])
@@ -131,26 +152,25 @@ def get_attendance():
     """
     try:
         records = []
-        
+
         if os.path.exists(SCANS_CSV):
             with open(SCANS_CSV, 'r') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     records.append(row)
-                    print(f"📋 Record: {row}")  # Debug log
-        
+
         print(f"✅ Returning {len(records)} records")
         return jsonify({
             'ok': True,
             'records': records,
             'count': len(records)
         })
-        
+
     except Exception as e:
         print(f"❌ Error in get_attendance: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'ok': False}), 500
 
 
 @app.route('/api/clear_attendance', methods=['POST'])
@@ -162,16 +182,16 @@ def clear_attendance():
         with open(SCANS_CSV, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['timestamp', 'roll_number', 'status', 'distance'])
-        
+
         print("🗑️  Cleared all attendance records")
         return jsonify({
             'ok': True,
             'message': 'All records cleared'
         })
-        
+
     except Exception as e:
         print(f"❌ Error in clear_attendance: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'ok': False}), 500
 
 
 @app.route('/api/health', methods=['GET'])
@@ -192,12 +212,12 @@ def test_upload():
         print("\n📝 TEST UPLOAD REQUEST")
         print(f"Form data: {dict(request.form)}")
         print(f"Files: {list(request.files.keys())}")
-        
+
         if 'video' in request.files:
             video = request.files['video']
             print(f"Video filename: {video.filename}")
             print(f"Video content type: {video.content_type}")
-            
+
         return jsonify({
             'ok': True,
             'form': dict(request.form),
@@ -205,16 +225,17 @@ def test_upload():
         })
     except Exception as e:
         print(f"❌ Test error: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'ok': False}), 500
 
 
 if __name__ == '__main__':
-    print("\n" + "="*60)
-    print("🚀 STARTING FLASK ATTENDANCE SERVER")
-    print("="*60)
+    print("\n" + "=" * 60)
+    print("🚀 STARTING FLASK ATTENDANCE SERVER (AUTO-ENROLLMENT ENABLED)")
+    print("=" * 60)
     print(f"📁 Upload folder: {UPLOAD_FOLDER}")
     print(f"📊 Scans CSV: {SCANS_CSV}")
     print(f"🌐 CORS: Enabled for all origins")
     print(f"📡 Server will run on: http://0.0.0.0:5000")
-    print("="*60 + "\n")
+    print(f"🆕 Auto-enrollment: Enabled for new roll numbers")
+    print("=" * 60 + "\n")
     app.run(debug=True, host='0.0.0.0', port=5000)
