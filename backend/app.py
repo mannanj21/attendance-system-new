@@ -10,6 +10,7 @@ from flask_cors import CORS
 import os
 import csv
 import json
+import base64
 import requests
 from datetime import datetime
 from werkzeug.utils import secure_filename
@@ -55,17 +56,22 @@ def save_face_data(data):
     try:
         # Get current file info (sha) from GitHub
         url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
-        headers = {"Authorization": f"token {token}"}
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
         get_resp = requests.get(url, headers=headers)
         sha = get_resp.json().get("sha")
 
-        # Prepare content
-        content = json.dumps(data, indent=2)
+        # Prepare content — must be base64 encoded
+        content_str = json.dumps(data, indent=2)
+        encoded_content = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
+
         message = f"Auto-update face_data.json on {datetime.utcnow().isoformat()}"
 
         payload = {
             "message": message,
-            "content": content.encode("utf-8").decode("utf-8"),
+            "content": encoded_content,
             "branch": branch,
         }
         if sha:
@@ -75,7 +81,8 @@ def save_face_data(data):
         if put_resp.status_code in (200, 201):
             print("✅ face_data.json synced to GitHub.")
         else:
-            print("⚠️ GitHub sync failed:", put_resp.text)
+            print(f"⚠️ GitHub sync failed ({put_resp.status_code}):", put_resp.text)
+
     except Exception as e:
         print("⚠️ Exception during GitHub sync:", e)
 
