@@ -9,9 +9,12 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
 import csv
+import json
+import requests
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from barcode_scanner import verify_face
+
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for React frontend
@@ -32,6 +35,50 @@ if not os.path.exists(SCANS_CSV):
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def save_face_data(data):
+    # 1️⃣ Save locally
+    with open("face_data.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+    # 2️⃣ Try to push to GitHub
+    token = os.getenv("GITHUB_TOKEN")
+    repo = os.getenv("GITHUB_REPO", "mannanj21/attendance-system-new")
+    branch = "main"
+    file_path = "backend/face_data.json"
+
+    if not token:
+        print("⚠️ GITHUB_TOKEN not found, skipping GitHub sync.")
+        return
+
+    try:
+        # Get current file info (sha) from GitHub
+        url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
+        headers = {"Authorization": f"token {token}"}
+        get_resp = requests.get(url, headers=headers)
+        sha = get_resp.json().get("sha")
+
+        # Prepare content
+        content = json.dumps(data, indent=2)
+        message = f"Auto-update face_data.json on {datetime.utcnow().isoformat()}"
+
+        payload = {
+            "message": message,
+            "content": content.encode("utf-8").decode("utf-8"),
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        put_resp = requests.put(url, headers=headers, json=payload)
+        if put_resp.status_code in (200, 201):
+            print("✅ face_data.json synced to GitHub.")
+        else:
+            print("⚠️ GitHub sync failed:", put_resp.text)
+    except Exception as e:
+        print("⚠️ Exception during GitHub sync:", e)
+
 
 
 @app.route('/api/mark_attendance', methods=['POST'])
