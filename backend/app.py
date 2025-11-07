@@ -137,6 +137,16 @@ def mark_attendance():
             status_text = f"{status_text} (NEW ENROLLMENT)"
             print(f"   🆕 NEW ENROLLMENT - First time for {barcode}")
 
+            try:
+                import json
+                with open("face_data.json", "r") as f:
+                    current_data = json.load(f)
+                save_face_data(current_data)
+                print("💾 face_data.json saved and synced to GitHub.")
+            except Exception as e:
+                print("⚠️ Could not sync face_data.json:", e)
+
+
         # Log to CSV
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         distance = result.get('distance', '')
