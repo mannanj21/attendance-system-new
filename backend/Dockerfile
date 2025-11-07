@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     liblapack-dev \
     libx11-6 \
     libx11-dev \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -24,18 +24,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
-# Copy only requirements first (cached layer)
+# Copy requirements first for caching
 COPY requirements.txt /app/requirements.txt
 
-# Upgrade pip and install Python dependencies (no-cache to keep image small)
+# Upgrade pip & install dependencies
 RUN pip install --upgrade pip setuptools wheel \
  && pip install --no-cache-dir -r /app/requirements.txt
 
-# Copy remaining source files
+# Copy the rest of the app
 COPY . /app
 
-# Expose port used by the app
+# Expose backend port
 EXPOSE 5000
 
-# Use PORT env if available (Railway sets $PORT); fallback to 5000 locally
+# Use $PORT (set by Railway) or 5000 locally
 CMD ["sh", "-c", "gunicorn app:app --bind 0.0.0.0:${PORT:-5000} --workers 1 --threads 4"]
